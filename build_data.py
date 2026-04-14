@@ -31,7 +31,8 @@ The Example proto contains the following fields:
 """
 import collections
 import six
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 
 FLAGS = tf.app.flags.FLAGS
 

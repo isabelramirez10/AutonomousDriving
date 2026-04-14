@@ -3,7 +3,8 @@
 from PIL import Image
 import numpy as np
 import math
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 
 _R_MEAN = 0
 _G_MEAN = 0

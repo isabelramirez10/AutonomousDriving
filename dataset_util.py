@@ -17,7 +17,8 @@
 source: https://github.com/tensorflow/models/blob/master/research/object_detection/utils/dataset_util.py
 """
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 
 
 def int64_feature(value):

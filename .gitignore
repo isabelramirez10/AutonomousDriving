@@ -1,0 +1,16 @@
+# Data - too large for git
+tfrecord/
+*.tfrecord
+*.rar
+
+# Model checkpoints - too large
+Fusionlane_model/
+model_pt/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Zone identifiers (Windows artifacts)
+*Zone.Identifier
