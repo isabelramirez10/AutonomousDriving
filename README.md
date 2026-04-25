@@ -22,7 +22,6 @@ You can evaluate you model in the same way as the training. Our model is availab
 
 -----
 ## Works Cited
-If you feel our work is helpfull, please cite as follow:
 ```
 @article{yin2020fusionlane,
   title={Fusionlane: Multi-sensor fusion for lane marking semantic segmentation using deep neural networks},
