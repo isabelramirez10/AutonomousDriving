@@ -205,7 +205,7 @@ def overlay_lane(frame_bgr, clean_mask_np, original_hw, H, W, alpha=0.5):
     return out
 
 
-def denorm_bgr(tensor_4hw, H, W):
+def denorm_bgr(tensor_4hw):
     """Denormalise a [4,H,W] tensor back to uint8 BGR for display."""
     rgb = tensor_4hw[:3].numpy() * _STD + _MEAN
     rgb = np.clip(rgb * 255, 0, 255).astype(np.uint8).transpose(1, 2, 0)
@@ -294,7 +294,7 @@ def main():
                 cv2.imwrite(os.path.join(args.output_dir, "heatmap",    f"{stem}.png"),
                             make_heatmap(conf_np))
 
-                orig_bgr  = denorm_bgr(tensors[i].cpu(), H, W)
+                orig_bgr  = denorm_bgr(tensors[i].cpu())
                 raw_bgr   = cv2.cvtColor(raw_mask * 255, cv2.COLOR_GRAY2BGR)
                 clean_bgr = cv2.cvtColor(clean    * 255, cv2.COLOR_GRAY2BGR)
                 panel     = np.concatenate(

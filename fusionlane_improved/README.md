@@ -19,7 +19,8 @@ A PyTorch re-implementation and improvement of the FusionLane multi-sensor lane 
 11. [Using Real TFRecord Data](#11-using-real-tfrecord-data)
 12. [Tuning Guide](#12-tuning-guide)
 13. [Troubleshooting](#13-troubleshooting)
-14. [Works Cited](#14-works-cited)
+14. [Architecture Diagram](#14-architecture-diagram)
+15. [Works Cited](#15-works-cited)
 
 ---
 
@@ -386,7 +387,48 @@ If your TFRecord uses different key names, update the `feat` dict in `dataset_pt
 
 ---
 
-## 14. Works Cited
+## 14. Architecture Diagram
+
+The diagram below mirrors the style of the original FusionLane paper figure — parallelograms for data, rectangles for networks and processes. Paste the Mermaid block at [mermaid.live](https://mermaid.live) to export a high-resolution SVG or PNG suitable for a research paper.
+
+```mermaid
+flowchart LR
+    T1[/RGB Training Data/]:::data
+    T2[Encoder-Decoder Network]:::net
+    T3[/Trained Model/]:::data
+
+    I1[/Road Images or Video/]:::data
+    PP[Preprocessing]:::net
+    RD[/Fused Tensor 4 x H x W/]:::data
+    FL[FusionLane Improved Network]:::net
+    PO[Post-Processing]:::net
+
+    O1[/Lane Mask/]:::data
+    O2[/Confidence Heatmap/]:::data
+    O3[/Overlay Video/]:::data
+
+    T1 --> T2 --> T3 --> FL
+    I1 --> PP --> RD --> FL
+    FL --> PO --> O1 & O2 & O3
+
+    classDef data fill:#fff,stroke:#444,stroke-width:1.5px
+    classDef net  fill:#f5f5f5,stroke:#444,stroke-width:1.5px
+```
+
+**Reading the diagram:**
+
+| Shape | Meaning |
+|---|---|
+| Parallelogram | Data / dataset / stored artifact |
+| Rectangle | Network, model, or processing step |
+
+**Training path** (top row): RGB training data feeds the encoder-decoder, producing the saved model checkpoint.
+
+**Inference path** (bottom rows): Road images or video are preprocessed into a 4-channel tensor (RGB + region mask), passed through the trained network, and cleaned by confidence thresholding and morphological post-processing to produce lane masks, heatmaps, and an annotated overlay video.
+
+---
+
+## 15. Works Cited
 
 [1] Yin, R., Cheng, Y., Wu, H., Song, Y., Yu, B., & Niu, R. (2020). FusionLane: Multi-sensor fusion for lane marking semantic segmentation using deep neural networks. *IEEE Transactions on Intelligent Transportation Systems, 23*(2), 1543–1553. https://doi.org/10.1109/TITS.2020.3030086
 
