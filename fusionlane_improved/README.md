@@ -1,146 +1,181 @@
 # FusionLane Improved
 
-Binary lane-marking segmentation in PyTorch — runs on TFRecord datasets, your own road images, dashcam video, or fully synthetic dummy data with no setup required.
+A PyTorch re-implementation and improvement of the FusionLane multi-sensor lane detection pipeline [1]. Adds ImageNet normalization, data augmentation, hybrid Cross-Entropy + Dice loss [2], confidence-filtered post-processing, morphological cleanup, an LR scheduler, gradient clipping, early stopping, and support for raw road images and dashcam video — all with no dataset required for initial testing.
 
 ---
 
-## Files at a glance
+## Table of Contents
 
-| File | What it does |
+1. [Project Overview](#1-project-overview)
+2. [What Was Improved](#2-what-was-improved)
+3. [File Guide](#3-file-guide)
+4. [Setup](#4-setup)
+5. [Quick Start — No Data Required](#5-quick-start--no-data-required)
+6. [Running on Your Own Video or Images](#6-running-on-your-own-video-or-images)
+7. [Easy In-Code Configuration](#7-easy-in-code-configuration)
+8. [Training in Depth](#8-training-in-depth)
+9. [Inference Outputs Explained](#9-inference-outputs-explained)
+10. [Connecting the Full FusionLane Model](#10-connecting-the-full-fusionlane-model)
+11. [Using Real TFRecord Data](#11-using-real-tfrecord-data)
+12. [Tuning Guide](#12-tuning-guide)
+13. [Troubleshooting](#13-troubleshooting)
+14. [Works Cited](#14-works-cited)
+
+---
+
+## 1. Project Overview
+
+FusionLane Improved performs **binary lane-marking segmentation** — classifying every pixel in a road image as either background (class 0) or lane (class 1). It is derived from the original FusionLane architecture [1], which fused RGB camera data with region masks through an Xception backbone [3], ASPP module [4], and ConvLSTM temporal head [5].
+
+This improved version keeps the same pipeline structure but replaces or augments several components to improve training stability, output quality, and ease of use.
+
+---
+
+## 2. What Was Improved
+
+| Component | Original | Improved | Why It Matters |
+|---|---|---|---|
+| **Normalization** | Raw pixel values [0, 255] | ImageNet mean/std normalization [6] | Aligns input distribution with pretrained weight expectations |
+| **Augmentation** | None | Random horizontal flip during training | Reduces overfitting; roads are horizontally symmetric |
+| **Loss function** | Weighted cross-entropy only | Hybrid CE + Dice loss [2] | Dice loss directly optimizes overlap; CE handles class imbalance |
+| **Confidence filtering** | Argmax only | P(lane) > threshold gate before argmax | Removes uncertain pixels that inflate false-positive rates |
+| **Post-processing** | None | Morphological open/close + blob removal (scipy [7]) | Eliminates small isolated noise blobs from predictions |
+| **LR scheduling** | Constant LR | ReduceLROnPlateau or cosine decay | Prevents LR from being too high late in training |
+| **Gradient clipping** | None | `clip_grad_norm_` at each step | Prevents exploding gradients on class-imbalanced batches |
+| **Early stopping** | Fixed epoch count | Stops when val mIoU stagnates | Avoids wasted compute and overfitting |
+| **Training log** | Terminal only | CSV log per epoch in `outputs/logs/` | Enables post-hoc analysis and plotting |
+| **Input modes** | TFRecord only | TFRecord, image folder, video file, dummy data | No dataset needed for development or demos |
+| **Video output** | None | Overlay video with green lane annotation | Makes results immediately interpretable |
+
+---
+
+## 3. File Guide
+
+| File | Purpose |
 |---|---|
-| `dataset_pt.py` | Loads data from TFRecords / image folder / video / dummy; applies normalization and augmentation |
-| `train_pt.py` | Trains the model with hybrid Cross-Entropy + Dice loss; saves `best_model.pth` |
-| `infer_pt.py` | Runs inference on the same data the model was trained/tested on |
-| `infer_media.py` | **Easy entry point** — runs on any road video or image folder you drop in |
-| `requirements.txt` | Python dependencies |
+| [dataset_pt.py](dataset_pt.py) | Dataset class with auto-detected input mode, normalization, augmentation, temporal ordering |
+| [train_pt.py](train_pt.py) | Model definition, DiceLoss, hybrid loss, training loop with scheduler and early stopping |
+| [infer_pt.py](infer_pt.py) | Inference on TFRecord or dummy data; outputs four image subfolders |
+| [infer_media.py](infer_media.py) | **Easy entry point** — inference on any road video or image folder you provide |
+| [requirements.txt](requirements.txt) | Python package dependencies |
 
 ---
 
-## Quick start (no data needed)
+## 4. Setup
+
+**Requirements:** Python 3.9 or newer. TensorFlow is optional (only needed for TFRecord loading).
 
 ```bash
-# 1. Create and activate virtual environment
+# Create and activate a virtual environment
 python -m venv venv
+
 venv\Scripts\activate          # Windows
 # source venv/bin/activate     # Mac / Linux
 
-# 2. Install dependencies
+# Install dependencies
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# 3. Train for 2 epochs on synthetic dummy data
-python train_pt.py --epochs 2 --image_height 64 --image_width 64
+# Optional: TFRecord support
+pip install tensorflow
+```
 
-# 4. Run inference
-python infer_pt.py --image_height 64 --image_width 64
-
-# 5. Check outputs
-#    outputs/inference/raw/        - raw predictions
-#    outputs/inference/cleaned/    - filtered predictions
-#    outputs/inference/heatmap/    - confidence maps
-#    outputs/inference/comparison/ - side-by-side panels
+**Verify the install:**
+```bash
+python -c "import torch; import cv2; import scipy; import tqdm; print('OK')"
 ```
 
 ---
 
-## Running on your own road video or images
+## 5. Quick Start — No Data Required
 
-Use `infer_media.py` — the dedicated script for real-world input.
+The project runs on synthetic dummy data out of the box.
+
+```bash
+# Train for 5 epochs on dummy data (64×64 images for speed)
+python train_pt.py --epochs 5 --image_height 64 --image_width 64
+
+# Run inference with the saved checkpoint
+python infer_pt.py --image_height 64 --image_width 64
+
+# Check outputs
+#   outputs/inference/raw/        white pixels = predicted lane
+#   outputs/inference/cleaned/    filtered + denoised predictions
+#   outputs/inference/heatmap/    blue=uncertain, red=confident
+#   outputs/inference/comparison/ 4-panel side-by-side
+```
+
+---
+
+## 6. Running on Your Own Video or Images
+
+Use [infer_media.py](infer_media.py) — it handles any road footage with no extra configuration.
 
 ### From a dashcam video
-
 ```bash
-python infer_media.py --input path/to/dashcam.mp4 --model_path ./outputs/best_model.pth
+python infer_media.py --input path/to/dashcam.mp4
 ```
-
-Outputs:
-- `outputs/inference/raw/`, `cleaned/`, `heatmap/`, `comparison/` — one PNG per frame
-- `outputs/inference/lane_overlay.mp4` — original video with green lane overlay drawn on top
+Produces all four image output folders **plus** `outputs/inference/lane_overlay.mp4` — the original video with a semi-transparent green lane drawn on top.
 
 ### From a folder of images
-
 ```bash
-python infer_media.py --input path/to/road_images/ --model_path ./outputs/best_model.pth
+python infer_media.py --input path/to/road_frames/
 ```
-
-Any mix of `.jpg`, `.png`, `.bmp`, `.tiff` inside the folder works. Images are sorted alphabetically.
+Images are sorted alphabetically. Supported formats: `.jpg` `.jpeg` `.png` `.bmp` `.tiff` `.webp`
 
 ### From a single image
-
 ```bash
-python infer_media.py --input path/to/road.jpg --model_path ./outputs/best_model.pth
+python infer_media.py --input path/to/road.jpg
 ```
 
 ### Supported video formats
 `.mp4`  `.avi`  `.mov`  `.mkv`  `.m4v`  `.wmv`  `.flv`
 
-### Supported image formats
-`.jpg`  `.jpeg`  `.png`  `.bmp`  `.tiff`  `.tif`  `.webp`
-
-> **Note:** `infer_media.py` uses the model trained by `train_pt.py`.  
-> Run `train_pt.py` at least once to create `outputs/best_model.pth` before running `infer_media.py`.
+> **Important:** You must train the model first (`python train_pt.py`) to generate `outputs/best_model.pth` before running any inference script.
 
 ---
 
-## Easy in-code configuration
+## 7. Easy In-Code Configuration
 
-Every script has a `CONFIG` block near the top — edit it once and just run `python script.py` without typing flags every time.
+Every script has a `CONFIG` dictionary near the top. Edit it once and run `python script.py` without typing flags each time. Command-line flags always override CONFIG values.
 
 ### `infer_media.py` — for your own video / images
 
-Open [infer_media.py](infer_media.py) and find this section:
-
 ```python
-# =============================================================================
-# EASY CONFIG — edit these to run without typing command-line flags.
-# =============================================================================
 CONFIG = {
-    # ── Input ────────────────────────────────────────────────────────────────
-    "input":        "./my_road_video.mp4",   # <-- change this to your file/folder
-    # ── Model ────────────────────────────────────────────────────────────────
+    "input":        "./my_road_video.mp4",   # <-- change to your file or folder
     "model_path":   "./outputs/best_model.pth",
-    # ── Output ───────────────────────────────────────────────────────────────
     "output_dir":   "./outputs/inference",
-    # ── Image size (must match what you trained with) ─────────────────────────
-    "image_height": 512,
-    "image_width":  512,
-    # ── Post-processing ───────────────────────────────────────────────────────
-    "threshold":    0.50,   # P(lane) required to keep a pixel (lower = more lane shown)
-    "min_blob":     100,    # smallest connected-component kept in pixels
-    # ── Performance ───────────────────────────────────────────────────────────
+    "image_height": 512,    # must match training height
+    "image_width":  512,    # must match training width
+    "threshold":    0.50,   # lower = more lane pixels kept
+    "min_blob":     100,    # minimum blob size to keep (pixels)
     "batch_size":   4,
 }
-# =============================================================================
 ```
 
-Then just run:
-```bash
-python infer_media.py
-```
-
-### `train_pt.py` — training parameters
-
-Open [train_pt.py](train_pt.py) and find:
+### `train_pt.py` — training hyperparameters
 
 ```python
 CONFIG = {
     "data_dir":     "./data",    # TFRecord folder | image folder | video file
     "model_dir":    "./outputs",
     "epochs":       10,
-    "batch_size":   4,
+    "batch_size":   4,           # must be divisible by 4
     "num_workers":  0,
     "image_height": 512,
     "image_width":  512,
     "loss_alpha":   0.5,         # 0 = pure Dice, 1 = pure CE
-    "lane_weight":  2.0,         # class weight for lane pixels
+    "lane_weight":  2.0,
     "bg_weight":    1.0,
     "lr":           1e-3,
+    "grad_clip":    1.0,         # 0 to disable gradient clipping
+    "patience":     5,           # early-stopping patience (epochs)
+    "scheduler":    "plateau",   # "plateau" | "cosine" | "none"
 }
 ```
 
 ### `infer_pt.py` — inference on TFRecord / dummy data
-
-Open [infer_pt.py](infer_pt.py) and find:
 
 ```python
 CONFIG = {
@@ -156,170 +191,219 @@ CONFIG = {
 }
 ```
 
-> Command-line flags always take priority over CONFIG values, so you can mix both:
-> ```bash
-> python infer_media.py --threshold 0.3   # overrides CONFIG["threshold"]
-> ```
-
 ---
 
-## Project folder structure
+## 8. Training in Depth
 
-```
-fusionlane_improved/
-├── dataset_pt.py          data loader (normalization, augmentation, all input modes)
-├── train_pt.py            training loop + model definition
-├── infer_pt.py            inference on TFRecord / dummy data
-├── infer_media.py         inference on your own video or image folder
-├── requirements.txt
-├── README.md
-│
-├── data/                  place TFRecord files here (optional)
-└── outputs/               created automatically
-    ├── best_model.pth     saved by train_pt.py
-    ├── logs/
-    └── inference/
-        ├── raw/           argmax predictions
-        ├── cleaned/       confidence-filtered + morphologically cleaned
-        ├── heatmap/       P(lane) confidence maps
-        ├── comparison/    4-panel side-by-side
-        └── lane_overlay.mp4   (only for video input via infer_media.py)
-```
+### How input data is auto-detected
 
----
+You do not need to set an input mode flag — the dataset inspects `data_dir` and picks the right loader:
 
-## How data input is auto-detected
-
-You do not need to set an input mode flag. The dataset detects what you have:
-
-| What's in `data_dir` / `--input` | Mode used | Labels available? |
+| Contents of `data_dir` | Mode | Labels |
 |---|---|---|
-| `train-0000X-of-00004.tfrecord` files | TFRecord | Yes (from annotation) |
-| Image files (`.jpg` `.png` etc.) | Image folder | No (zeros) |
-| Video file (`.mp4` `.avi` etc.) | Video | No (zeros) |
-| Anything else / empty folder | Dummy data | Synthetic |
+| `train-0000X-of-00004.tfrecord` files | TFRecord | From annotation |
+| Image files (`.jpg`, `.png`, etc.) | Image folder | Zeros (inference only) |
+| A video file path (`.mp4`, `.avi`, etc.) | Video | Zeros (inference only) |
+| Empty or unrecognised | Synthetic dummy data | Synthetic |
 
-When no real labels are available (image or video mode), training loss is computed against zero labels — useful for fine-tuning on structure, but not for measuring accuracy.
-
----
-
-## All CLI arguments
-
-### `train_pt.py`
-
-| Flag | Default | Description |
-|---|---|---|
-| `--data_dir` | `./data` | TFRecord folder, image folder, or video file |
-| `--model_dir` | `./outputs` | Where `best_model.pth` is saved |
-| `--epochs` | `10` | Training epochs |
-| `--batch_size` | `4` | Must be divisible by 4 |
-| `--num_workers` | `0` | DataLoader workers |
-| `--image_height` | `512` | Resize height |
-| `--image_width` | `512` | Resize width |
-| `--loss_alpha` | `0.5` | CE fraction in hybrid loss |
-| `--lane_weight` | `2.0` | CE class weight for lane |
-| `--bg_weight` | `1.0` | CE class weight for background |
-| `--lr` | `1e-3` | Adam learning rate |
-
-### `infer_media.py`
-
-| Flag | Default | Description |
-|---|---|---|
-| `--input` | `./my_road_video.mp4` | Video file, image folder, or single image |
-| `--model_path` | `./outputs/best_model.pth` | Checkpoint from `train_pt.py` |
-| `--output_dir` | `./outputs/inference` | Where outputs are saved |
-| `--image_height` | `512` | Must match training height |
-| `--image_width` | `512` | Must match training width |
-| `--threshold` | `0.50` | P(lane) minimum to keep a pixel |
-| `--min_blob` | `100` | Minimum blob size in pixels |
-| `--batch_size` | `4` | Must be divisible by 4 |
-
-### `infer_pt.py`
-
-| Flag | Default | Description |
-|---|---|---|
-| `--data_dir` | `./data` | Same as training |
-| `--model_path` | `./outputs/best_model.pth` | Checkpoint |
-| `--output_dir` | `./outputs/inference` | Where outputs are saved |
-| `--image_height` | `512` | Must match training height |
-| `--image_width` | `512` | Must match training width |
-| `--threshold` | `0.65` | P(lane) minimum |
-| `--min_blob` | `200` | Minimum blob size |
-| `--batch_size` | `4` | Must be divisible by 4 |
-
----
-
-## Understanding the outputs
-
-| Subfolder | Content | When to look at it |
-|---|---|---|
-| `raw/` | Pure argmax — every pixel the model thinks is lane | Baseline; shows false positives too |
-| `cleaned/` | Only pixels with P(lane) > threshold, small blobs removed | Use this as your primary result |
-| `heatmap/` | Jet-coloured confidence map (blue=uncertain, red=certain) | Helps pick the right `--threshold` |
-| `comparison/` | 4-panel: original \| raw \| cleaned \| heatmap | Quick visual sanity check |
-| `lane_overlay.mp4` | Original video + green lane drawn on top | Video only — final deliverable |
-
----
-
-## Tuning tips
-
-| Parameter | Too low | Too high |
-|---|---|---|
-| `--threshold` | Many false-positive pixels (noise shows as lane) | Real lanes disappear from `cleaned/` |
-| `--min_blob` | Tiny dots remain in `cleaned/` | Dashed lanes get erased |
-| `--loss_alpha` | Model ignores background (over-segments) | Dice loss has no effect |
-| `--lane_weight` | Lane pixels consistently missed | Everything predicted as lane |
-| `--lr` | Training very slow to converge | Loss becomes NaN |
-
----
-
-## Connecting your real FusionLane model
-
-The training script uses a lightweight `SimpleFusionLaneNet` by default. It also tries to import the full `FusionLaneModel` from `model_pt.py` if one is present:
-
-```python
-# In train_pt.py — build_model() function
-def build_model(num_classes=2):
-    try:
-        from model_pt import FusionLaneModel
-        return FusionLaneModel(num_classes=num_classes)
-    except Exception:
-        return SimpleFusionLaneNet(in_channels=4, num_classes=num_classes)
-```
-
-To use the full model, copy `model_pt.py` into `fusionlane_improved/`. Adjust `num_classes` to match your dataset (7 for the original FusionLane classes, 2 for binary lane/background).
-
----
-
-## Requirements
-
-```
-torch
-numpy
-opencv-python
-scipy
-tqdm
-pillow
-```
-
-TensorFlow is optional — only needed for reading TFRecord files. If it is not installed, the code automatically uses dummy data or your own images/video.
+### Training command — full example
 
 ```bash
-pip install -r requirements.txt
-# Optionally, for TFRecord support:
-pip install tensorflow
+python train_pt.py \
+  --data_dir      ./data \
+  --model_dir     ./outputs \
+  --epochs        120 \
+  --batch_size    4 \
+  --num_workers   0 \
+  --image_height  512 \
+  --image_width   512 \
+  --loss_alpha    0.5 \
+  --lane_weight   2.0 \
+  --bg_weight     1.0 \
+  --lr            1e-3 \
+  --grad_clip     1.0 \
+  --patience      15 \
+  --scheduler     plateau
+```
+
+### All training arguments
+
+| Flag | Default | Description |
+|---|---|---|
+| `--data_dir` | `./data` | Input: TFRecord folder, image folder, or video file |
+| `--model_dir` | `./outputs` | Directory for `best_model.pth` and `logs/` |
+| `--epochs` | `10` | Maximum training epochs |
+| `--batch_size` | `4` | Must be divisible by 4 |
+| `--num_workers` | `0` | DataLoader workers (keep 0 with TF-based loading) |
+| `--image_height` | `512` | Resize height |
+| `--image_width` | `512` | Resize width |
+| `--loss_alpha` | `0.5` | CE weight in hybrid loss (0 = pure Dice, 1 = pure CE) |
+| `--lane_weight` | `2.0` | Class weight for lane pixels in CE |
+| `--bg_weight` | `1.0` | Class weight for background pixels in CE |
+| `--lr` | `1e-3` | Initial Adam learning rate |
+| `--grad_clip` | `1.0` | Gradient clipping max-norm; `0` to disable |
+| `--patience` | `5` | Early-stopping patience in epochs |
+| `--scheduler` | `plateau` | LR scheduler: `plateau` / `cosine` / `none` |
+
+### Training outputs
+
+```
+outputs/
+├── best_model.pth          checkpoint with highest val mIoU
+└── logs/
+    └── training_log.csv    epoch-by-epoch stats: loss, ce, dice, mIoU, lr
+```
+
+The CSV can be opened in Excel or plotted with Python:
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+df = pd.read_csv("outputs/logs/training_log.csv")
+df.plot(x="epoch", y=["train_loss", "val_loss"])
+plt.show()
 ```
 
 ---
 
-## Troubleshooting
+## 9. Inference Outputs Explained
 
-| Problem | Fix |
+```
+outputs/inference/
+├── raw/            argmax class map — white = lane (255), black = background (0)
+├── cleaned/        confidence-filtered + morphologically cleaned mask
+├── heatmap/        P(lane) as a jet colormap (blue=low, red=high confidence)
+├── comparison/     4-panel PNG: original | raw | cleaned | heatmap
+└── lane_overlay.mp4   (video input only) green overlay on original footage
+```
+
+| Output | Best used for |
 |---|---|
-| `ModuleNotFoundError: tensorflow` | Install it separately or ignore it — code falls back to image/video/dummy input |
-| `FileNotFoundError: best_model.pth` | Run `train_pt.py` first |
-| `batch_size must be divisible by 4` | Use `--batch_size 4` or `8` or `12` |
-| `cleaned/` is all black | Lower `--threshold` (try `0.3`) or lower `--min_blob` (try `10`) |
-| `heatmap/` is all blue | Model is not confident — train for more epochs or with a lower learning rate |
-| `loss is NaN` | Lower `--lr` (try `1e-4`) |
-| Video input only loads 500 frames | Split the video into shorter clips, or increase the limit in `_load_video()` in `dataset_pt.py` |
+| `raw/` | Seeing everything the model considers a lane, including noisy predictions |
+| `cleaned/` | The primary result — noise and uncertain pixels removed |
+| `heatmap/` | Diagnosing where the model is uncertain; picking a `--threshold` value |
+| `comparison/` | Quick visual sanity check across all four representations |
+| `lane_overlay.mp4` | Showing the result to others or comparing against raw footage |
+
+### Inference command — full example
+
+```bash
+python infer_media.py \
+  --input         ./dashcam.mp4 \
+  --model_path    ./outputs/best_model.pth \
+  --output_dir    ./outputs/inference \
+  --image_height  512 \
+  --image_width   512 \
+  --threshold     0.50 \
+  --min_blob      100 \
+  --batch_size    4
+```
+
+---
+
+## 10. Connecting the Full FusionLane Model
+
+The scripts currently use `SimpleFusionLaneNet`, a lightweight placeholder that trains quickly for testing. `train_pt.py` will automatically use the full `FusionLaneModel` from the original paper if `model_pt.py` is present in the same folder:
+
+```python
+# train_pt.py — build_model() already tries this:
+try:
+    from model_pt import FusionLaneModel
+    return FusionLaneModel(num_classes=num_classes)
+except Exception:
+    return SimpleFusionLaneNet(in_channels=4, num_classes=num_classes)
+```
+
+**Steps to enable the full model:**
+
+1. Copy `model_pt.py` from the parent `AutonomousDriving/` folder into `fusionlane_improved/`.
+2. The full model takes separate `image [B,3,H,W]` and `region [B,1,H,W]` tensors. Update the training loop in `train_pt.py` `train_one_epoch()`:
+   ```python
+   # Change:
+   logits = model(image)
+   # To:
+   logits = model(image[:, :3], image[:, 3:4], training=True)
+   ```
+3. Set `--num_classes 7` if using the original 7-class label set (solid, dash, arrow, etc.).
+
+---
+
+## 11. Using Real TFRecord Data
+
+Download the FusionLane TFRecords from the original paper's release and place them in `data/`:
+
+```
+data/
+├── train-00000-of-00004.tfrecord
+├── train-00001-of-00004.tfrecord
+├── train-00002-of-00004.tfrecord
+├── train-00003-of-00004.tfrecord
+├── testing-00000-of-00004.tfrecord
+├── testing-00001-of-00004.tfrecord
+├── testing-00002-of-00004.tfrecord
+└── testing-00003-of-00004.tfrecord
+```
+
+Each record must contain three byte-string features:
+
+| Key | Content |
+|---|---|
+| `image/encoded` | PNG or JPEG-encoded RGB image |
+| `region/encoded` | PNG-encoded single-channel road-region mask |
+| `label/encoded` | PNG-encoded single-channel label map |
+
+If your TFRecord uses different key names, update the `feat` dict in `dataset_pt.py` inside `_load_tfrecords()`.
+
+---
+
+## 12. Tuning Guide
+
+| Parameter | Raise when | Lower when |
+|---|---|---|
+| `--threshold` | Too many false positives in `cleaned/` | Real lanes disappear from `cleaned/` |
+| `--min_blob` | Small isolated dots persist in `cleaned/` | Dashed lane segments are erased |
+| `--loss_alpha` | Model over-segments (Dice loss not helping) | Model misses lane pixels entirely |
+| `--lane_weight` | Lane pixels are consistently missed (low recall) | Everything predicted as lane (low precision) |
+| `--lr` | Training converges very slowly | Loss becomes NaN or oscillates |
+| `--grad_clip` | Losses spike suddenly during training | No effect (clip is rarely triggered) |
+| `--patience` | Training stops too early on noisy data | Model overfits with no improvement for many epochs |
+| `--scheduler` | Switch from `plateau` to `cosine` for smoother decay on long runs | — |
+
+---
+
+## 13. Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| `ModuleNotFoundError: tensorflow` | Install it separately (`pip install tensorflow`) or ignore it — code uses dummy/image/video data automatically |
+| `FileNotFoundError: best_model.pth` | Run `train_pt.py` first to generate the checkpoint |
+| `AssertionError: batch_size must be divisible by 4` | Use `--batch_size 4`, `8`, `12`, etc. |
+| `cleaned/` output is all black | Lower `--threshold` (try `0.30`) or lower `--min_blob` (try `10`) |
+| `heatmap/` is entirely blue | Model is under-confident — train for more epochs or with a larger `--lane_weight` |
+| `loss is NaN` during training | Lower `--lr` (try `1e-4`) or enable `--grad_clip 1.0` |
+| Video loads only first 500 frames | Split your clip into shorter segments, or increase the frame cap in `_load_video()` inside `dataset_pt.py` |
+| Training stops too early | Increase `--patience` (e.g. `--patience 20`) |
+| LR not decreasing with `plateau` | Check that val mIoU is actually being computed (non-zero labels required) |
+
+---
+
+## 14. Works Cited
+
+[1] Yin, R., Cheng, Y., Wu, H., Song, Y., Yu, B., & Niu, R. (2020). FusionLane: Multi-sensor fusion for lane marking semantic segmentation using deep neural networks. *IEEE Transactions on Intelligent Transportation Systems, 23*(2), 1543–1553. https://doi.org/10.1109/TITS.2020.3030086
+
+[2] Milletari, F., Navab, N., & Ahmadi, S. A. (2016). V-Net: Fully convolutional neural networks for volumetric medical image segmentation. *Proceedings of the 2016 Fourth International Conference on 3D Vision (3DV)*, 565–571. https://doi.org/10.1109/3DV.2016.79
+
+[3] Chollet, F. (2017). Xception: Deep learning with depthwise separable convolutions. *Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)*, 1251–1258. https://doi.org/10.1109/CVPR.2017.195
+
+[4] Chen, L.-C., Zhu, Y., Papandreou, G., Schroff, F., & Adam, H. (2018). Encoder-decoder with atrous separable convolution for semantic image segmentation (DeepLabV3+). *Proceedings of the European Conference on Computer Vision (ECCV)*, 801–818. https://doi.org/10.1007/978-3-030-01234-2_49
+
+[5] Xingjian, S., Chen, Z., Wang, H., Yeung, D.-Y., Wong, W.-K., & Woo, W.-c. (2015). Convolutional LSTM network: A machine learning approach for precipitation nowcasting. *Advances in Neural Information Processing Systems (NeurIPS) 28*. https://proceedings.neurips.cc/paper/2015/hash/07563a3fe3bbe7e3ba84431ad9d055af-Abstract.html
+
+[6] Russakovsky, O., Deng, J., Su, H., Krause, J., Satheesh, S., Ma, S., ... & Fei-Fei, L. (2015). ImageNet large scale visual recognition challenge. *International Journal of Computer Vision, 115*(3), 211–252. https://doi.org/10.1007/s11263-015-0816-y
+
+[7] Virtanen, P., Gommers, R., Oliphant, T. E., Haberland, M., Reddy, T., Cournapeau, D., ... & SciPy 1.0 Contributors. (2020). SciPy 1.0: Fundamental algorithms for scientific computing in Python. *Nature Methods, 17*(3), 261–272. https://doi.org/10.1038/s41592-020-0772-5
+
+[8] Paszke, A., Gross, S., Massa, F., Lerer, A., Bradbury, J., Chanan, G., ... & Chintala, S. (2019). PyTorch: An imperative style, high-performance deep learning library. *Advances in Neural Information Processing Systems (NeurIPS) 32*. https://proceedings.neurips.cc/paper/2019/hash/bdbca288fee7f92f2bfa9f7012727740-Abstract.html
+
+[9] Bradski, G. (2000). The OpenCV library. *Dr. Dobb's Journal of Software Tools*. https://opencv.org
+
+[10] Ioffe, S., & Szegedy, C. (2015). Batch normalization: Accelerating deep network training by reducing internal covariate shift. *Proceedings of the 32nd International Conference on Machine Learning (ICML)*, 448–456. https://proceedings.mlr.press/v37/ioffe15.html

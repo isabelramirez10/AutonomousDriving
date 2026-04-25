@@ -58,7 +58,7 @@ def cleanup_mask(mask, min_blob=200):
 
 def build_model(model_path, device):
     model = SimpleFusionLaneNet(in_channels=4, num_classes=2).to(device)
-    ckpt = torch.load(model_path, map_location=device)
+    ckpt = torch.load(model_path, map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
     return model

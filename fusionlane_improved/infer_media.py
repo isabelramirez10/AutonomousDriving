@@ -23,6 +23,17 @@ OUTPUT
     (original video with lane overlay drawn in green)
 """
 
+import argparse
+import os
+
+import cv2
+import numpy as np
+import torch
+from scipy import ndimage
+from tqdm import tqdm
+
+from train_pt import SimpleFusionLaneNet
+
 # =============================================================================
 # EASY CONFIG — edit these to run without typing command-line flags.
 # =============================================================================
@@ -44,17 +55,6 @@ CONFIG = {
 }
 # =============================================================================
 
-import argparse
-import os
-
-import cv2
-import numpy as np
-import torch
-from scipy import ndimage
-from tqdm import tqdm
-
-from train_pt import SimpleFusionLaneNet
-
 
 # ---------------------------------------------------------------------------
 # Model loading
@@ -67,7 +67,7 @@ def load_model(model_path, device):
             "Run train_pt.py first to generate best_model.pth."
         )
     model = SimpleFusionLaneNet(in_channels=4, num_classes=2).to(device)
-    ckpt  = torch.load(model_path, map_location=device)
+    ckpt  = torch.load(model_path, map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
     print(f"Loaded model from {model_path}")
