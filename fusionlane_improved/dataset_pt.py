@@ -89,6 +89,13 @@ class FusionLaneDataset(Dataset):
         return (os.path.isfile(self.data_dir) and
                 os.path.splitext(self.data_dir)[1].lower() in _VID_EXTS)
 
+    def _is_paired_folder(self):
+        """data_dir/images/ and data_dir/masks/ both exist."""
+        return (
+            os.path.isdir(os.path.join(self.data_dir, 'images')) and
+            os.path.isdir(os.path.join(self.data_dir, 'masks'))
+        )
+
     def _is_image_folder(self):
         if not os.path.isdir(self.data_dir):
             return False
@@ -123,6 +130,21 @@ class FusionLaneDataset(Dataset):
                 return self._load_video()
             except Exception as exc:
                 print(f"[FusionLaneDataset] Video load failed ({exc}), falling back.")
+
+        # Paired images+masks folder — has real labels, preferred over bare image folder
+        split_dir = os.path.join(self.data_dir, self.split)
+        if (os.path.isdir(os.path.join(split_dir, 'images')) and
+                os.path.isdir(os.path.join(split_dir, 'masks'))):
+            try:
+                return self._load_paired_folder(split_dir)
+            except Exception as exc:
+                print(f"[FusionLaneDataset] Paired folder load failed ({exc}), falling back.")
+
+        if self._is_paired_folder():
+            try:
+                return self._load_paired_folder(self.data_dir)
+            except Exception as exc:
+                print(f"[FusionLaneDataset] Paired folder load failed ({exc}), falling back.")
 
         if self._is_image_folder():
             try:
@@ -160,6 +182,67 @@ class FusionLaneDataset(Dataset):
             }
             for i, path in enumerate(files)
         ]
+
+    def _load_paired_folder(self, base_dir):
+        """
+        Load from base_dir/images/ + base_dir/masks/ [+ base_dir/depths/].
+        Each image must have a same-stem mask in masks/.
+        depths/ is optional: if present, depth PNGs are loaded as channel 4
+        (real LiDAR depth from prepare_kitti.py).  Absent → channel 4 = ones.
+        White pixels (> 127) in mask = lane (class 1); black = background (0).
+        """
+        img_dir   = os.path.join(base_dir, 'images')
+        mask_dir  = os.path.join(base_dir, 'masks')
+        depth_dir = os.path.join(base_dir, 'depths')
+        has_depth = os.path.isdir(depth_dir)
+
+        img_files = sorted(
+            f for f in os.listdir(img_dir)
+            if os.path.splitext(f)[1].lower() in _IMG_EXTS
+        )
+
+        samples = []
+        missing = 0
+        for f in img_files:
+            stem     = os.path.splitext(f)[0]
+            img_path = os.path.join(img_dir, f)
+
+            mask_path = None
+            for ext in ('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif'):
+                candidate = os.path.join(mask_dir, stem + ext)
+                if os.path.exists(candidate):
+                    mask_path = candidate
+                    break
+            if mask_path is None:
+                missing += 1
+                continue
+
+            depth_path = None
+            if has_depth:
+                for ext in ('.png', '.jpg', '.tiff'):
+                    candidate = os.path.join(depth_dir, stem + ext)
+                    if os.path.exists(candidate):
+                        depth_path = candidate
+                        break
+
+            samples.append({
+                'source':     'paired',
+                'img_path':   img_path,
+                'mask_path':  mask_path,
+                'depth_path': depth_path,   # None when no LiDAR depth available
+                'seq_id':     len(samples) // 4,
+                'frame_id':   len(samples) % 4,
+            })
+
+        if missing:
+            print(f"[FusionLaneDataset] WARNING: {missing} image(s) skipped (no mask).")
+        depth_count = sum(1 for s in samples if s['depth_path'])
+        mode = f"fusion ({depth_count} with LiDAR depth)" if has_depth else "camera-only"
+        print(f"[FusionLaneDataset] Paired folder [{mode}]: "
+              f"{len(samples)} pairs from {base_dir}")
+        if not samples:
+            raise ValueError(f"No matching image+mask pairs found in {base_dir}")
+        return samples
 
     def _load_video(self):
         import cv2
@@ -286,6 +369,38 @@ class FusionLaneDataset(Dataset):
                 np.concatenate([img_np.transpose(2, 0, 1), reg_np], axis=0).copy()
             )
 
+        # ── Paired image + mask [+ optional LiDAR depth] ─────────────
+        elif src == 'paired':
+            bgr = cv2.imread(s['img_path'])
+            if bgr is None:
+                raise IOError(f"Cannot read image: {s['img_path']}")
+            mask_gray = cv2.imread(s['mask_path'], cv2.IMREAD_GRAYSCALE)
+            if mask_gray is None:
+                raise IOError(f"Cannot read mask: {s['mask_path']}")
+            img_np = cv2.cvtColor(
+                cv2.resize(bgr, (W, H), interpolation=cv2.INTER_LINEAR),
+                cv2.COLOR_BGR2RGB,
+            ).astype(np.float32)
+            mask_r = cv2.resize(mask_gray, (W, H), interpolation=cv2.INTER_NEAREST)
+            lbl_np = (mask_r > 127).astype(np.int64)
+            label  = torch.from_numpy(lbl_np)
+
+            # Channel 4: real LiDAR depth if available, else all-ones
+            depth_path = s.get('depth_path')
+            if depth_path and os.path.exists(depth_path):
+                d = cv2.imread(depth_path, cv2.IMREAD_GRAYSCALE)
+                if d is not None:
+                    d = cv2.resize(d, (W, H), interpolation=cv2.INTER_LINEAR)
+                    reg_np = (d.astype(np.float32) / 255.0)[np.newaxis]  # [1,H,W]
+                else:
+                    reg_np = np.ones((1, H, W), dtype=np.float32)
+            else:
+                reg_np = np.ones((1, H, W), dtype=np.float32)
+
+            image  = torch.from_numpy(
+                np.concatenate([img_np.transpose(2, 0, 1), reg_np], axis=0).copy()
+            )
+
         # ── Video frame ───────────────────────────────────────────────
         elif src == 'video':
             bgr    = s['frame']
@@ -315,10 +430,16 @@ class FusionLaneDataset(Dataset):
                 ], axis=0).copy()
             )
 
-        # ── Augmentation (train only): random horizontal flip ─────────
-        if self.augment and torch.rand(1).item() > 0.5:
-            image = torch.flip(image, dims=[2])
-            label = torch.flip(label, dims=[1])
+        # ── Augmentation (train only) ─────────────────────────────────
+        if self.augment:
+            # Random horizontal flip
+            if torch.rand(1).item() > 0.5:
+                image = torch.flip(image, dims=[2])
+                label = torch.flip(label, dims=[1])
+            # Random brightness/contrast on RGB channels only
+            if torch.rand(1).item() > 0.5:
+                factor = 0.7 + torch.rand(1).item() * 0.6   # [0.7, 1.3]
+                image[:3] = image[:3] * factor
 
         image = normalize_image(image)
 

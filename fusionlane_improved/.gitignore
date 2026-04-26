@@ -1,5 +1,32 @@
+# Virtual environment
 venv/
-__pycache__/
-*.pyc
-outputs/
+.venv/
+
+# Downloaded datasets (too large for git — see TRAINING_GUIDE.md for download links)
+kitti_data/
 data/
+
+# Model outputs, videos, generated images, trained weights
+outputs/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model weights — tracked via Git LFS (see below) or excluded entirely
+# To track with Git LFS:  git lfs track "*.pth"
+*.pth
