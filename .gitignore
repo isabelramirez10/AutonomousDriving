@@ -1,16 +1,77 @@
-# Data - too large for git
+# ─── Python ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ─── Virtual environments ────────────────────────────────
+venv/
+env/
+.venv/
+.env
+ENV/
+
+# ─── Jupyter / IPython ───────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ─── WSL / Windows artifacts ─────────────────────────────
+*:Zone.Identifier
+*Zone.Identifier*
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ─── Editors / IDEs ──────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── FusionLane: data ────────────────────────────────────
 tfrecord/
 *.tfrecord
-*.rar
+*.tfrecords
 
-# Model checkpoints - too large
+# ─── FusionLane: model checkpoints ───────────────────────
 Fusionlane_model/
 model_pt/
+model_pt_boundary/
+*.pt
+*.pth
+*.ckpt
+*.ckpt-*
+checkpoint
+*.meta
+*.index
+*.data-*
 
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
+# ─── FusionLane: outputs / predictions ───────────────────
+output_images/
+output_images_pretrained/
+output_pretrained/
+output_60epochs/
+output_boosted/
+results/
+logs/
+runs/
+events.out.tfevents.*
 
-# Zone identifiers (Windows artifacts)
-*Zone.Identifier
+# ─── Archives ────────────────────────────────────────────
+*.rar
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# ─── Large/binary samples (optional — comment out to keep) ─
+bev_example.png

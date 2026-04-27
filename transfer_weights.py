@@ -213,10 +213,25 @@ def transfer(tf_ckpt, out_dir):
 
     # ConvLSTM cell gates:
     # TF kernel [H, W, in+hidden, 4*hidden] → PyTorch [4*hidden, in+hidden, H, W]
-    cp('conv_lstm.cell.gates.weight',
-       get('lstm/rnn/multi_rnn_cell/cell_0/conv_lstm_cell/kernel'), conv_w)
-    cp('conv_lstm.cell.gates.bias',
-       get('lstm/rnn/multi_rnn_cell/cell_0/conv_lstm_cell/biases'))
+    def _ijfo_to_ifgo(arr, axis):
+        """Reorder TF [i, j, f, o] → PyTorch [i, f, g, o] (j == g, just relabelled)."""
+        i, j, f, o = np.split(arr, 4, axis=axis)
+        return np.concatenate([i, f, j, o], axis=axis)
+
+    HIDDEN = 64
+    tf_kernel = get('lstm/rnn/multi_rnn_cell/cell_0/conv_lstm_cell/kernel')
+    tf_bias   = get('lstm/rnn/multi_rnn_cell/cell_0/conv_lstm_cell/biases')
+
+    # Kernel/bias: gate axis is -1
+    tf_kernel = _ijfo_to_ifgo(tf_kernel, axis=-1)
+    tf_bias   = _ijfo_to_ifgo(tf_bias,   axis=-1)
+
+    # Bake in TF ConvLSTMCell's runtime forget_bias=1.0 (not stored in 'biases').
+    # After reordering, f-gate occupies channels [HIDDEN : 2*HIDDEN].
+    tf_bias[HIDDEN:2*HIDDEN] += 1.0
+
+    cp('conv_lstm.cell.gates.weight', tf_kernel, conv_w)
+    cp('conv_lstm.cell.gates.bias',   tf_bias)
 
     # -----------------------------------------------------------------------
     # Decoder  (no bias in TF)
